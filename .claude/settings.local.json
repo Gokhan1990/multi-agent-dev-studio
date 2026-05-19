@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dotnet *)",
+      "Bash(powershell *)",
+      "Bash(curl *)",
+      "Bash(docker *)",
+      "Bash(netstat -ano)",
+      "Bash(findstr :1433)",
+      "PowerShell(docker compose *)"
+    ]
+  }
+}

@@ -1,0 +1,55 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: saasfast-postgres
+    environment:
+      POSTGRES_DB: saasfast
+      POSTGRES_USER: saasfast
+      POSTGRES_PASSWORD: saasfast123
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U saasfast -d saasfast"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - saasfast-net
+
+  backend-api:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: saasfast-backend
+    ports:
+      - "5000:8080"
+    environment:
+      - ASPNETCORE_URLS=http://+:8080
+      - Database__ConnectionString=Host=postgres;Port=5432;Database=saasfast;Username=saasfast;Password=saasfast123
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - saasfast-net
+
+  frontend:
+    build:
+      context: ../../frontend
+      dockerfile: Dockerfile
+    container_name: saasfast-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend-api
+    networks:
+      - saasfast-net
+
+volumes:
+  postgres_data:
+
+networks:
+  saasfast-net:
+    driver: bridge

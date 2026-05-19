@@ -1,0 +1,58 @@
+High-Level Architecture (Text Diagram):
+
+[User Interface] <--> [React Frontend (SPA)]
+        |
+        v
+[API Gateway] <-- SignalR (future voice) --> [Backend Services (.NET)]
+        |
+        v
+[Agent Communication Bus (In-Memory)] <---> [Strategy Room Agents] <--> [Engineering Room Agents]
+        |
+        v
+[MSSQL Database]
+
+Modules:
+- Backend:
+   * Presentation (API Controllers)
+   * Application (Use Cases, DTOs)
+   * Domain (Entities, Interfaces)
+   * Infrastructure (EF Core, Repositories, External Services)
+   * Shared (Kernel, Constants)
+- Frontend:
+   * components (shared UI)
+   * pages (Route-based views)
+   * store (Redux/Zustand state)
+   * services (API calls)
+   * hooks (custom React hooks)
+   * utils
+- Agent System:
+   * Agent Base Class (role, room, state)
+   * Message Bus (publish/subscribe)
+   * Room Coordinator (turn-based speaking)
+   * PROJECT_STATE Manager (atomic updates)
+   * LLM Interface (abstracted per agent)
+
+API Overview:
+- POST /api/ideas (submit idea)
+- GET /api/state (current PROJECT_STATE)
+- POST /api/room/strategy/message (agent message)
+- POST /api/room/engineering/message (agent message)
+- GET /api/architecture (current design)
+- GET /api/code/generate (trigger generation)
+
+Data Flow:
+1. User submits idea via UI → API → stored in PROJECT_STATE.
+2. CEO triggers Interview → Strategy Room.
+3. Product Strategist posts message → Message Bus → other agents receive.
+4. System Architect reads state, outputs architecture → stored in PROJECT_STATE.
+5. Backend/Frontend agents receive architecture, generate code → commit to repo.
+6. QA runs tests → DevOps prepares deployment.
+7. Real-time updates via SignalR (future) for voice/meeting UI.
+
+Boundaries:
+- UI Layer: React, communicates only via API.
+- API Layer: .NET Web API, validates input, orchestrates use cases.
+- Domain Layer: Pure business logic, independent of frameworks.
+- Infrastructure Layer: EF Core for MSSQL, file system, external LLM calls.
+- Agent Layer: Orchestrates turn-based talks, reads/writes PROJECT_STATE atomically.
+- Database Layer: MSSQL, accessed only via Infrastructure.

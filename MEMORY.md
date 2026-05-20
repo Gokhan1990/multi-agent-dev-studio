@@ -551,11 +551,55 @@ Kullanıcı (ses/text) → Frontend → POST /api/agent/ask
 6. ~~CodeExecutorService DI + DeepSeek + terminal gereksiz kod değişikliği~~ ✅
 7. ~~Self-Improvement: Code Review + Performance + Self-Correction~~ ✅
 8. ~~Conversation Log + Agent Context + Auto Deploy~~ ✅
-9. ❌ **Acil: Container'ları yeniden ayağa kaldır** (hepsi durmuş durumda)
+9. ~~Container'ları yeniden ayağa kaldır~~ ✅
 10. ❌ **Commands/ dizinini oluştur** (queue.json kaybolmuş, watcher çalışmaz)
 11. ❌ **AgentMemory/ dizinini oluştur** (conversation log, episodic memory, eventler için)
-12. ❌ **generated_projects/ dizinini oluştur** (agent prompt'larda referans ediliyor)
-13. ❌ **OpencodeService.cs doğrulama** — opencode CLI container içinde `/usr/bin/opencode` yolunda mı?
+12. ~~generated_projects/ dizinini oluştur~~ ✅
+13. ~~OpencodeService.cs doğrulama — container ayakta~~ ✅
+14. ❌ **Commands/ dizini oluşturulacak** (watch_commands.ps1 için queue.json)
+
+---
+
+### Oturum 14 (2026-05-20) — Ajanlar Yalnızca generated_projects/ Klasöründe Çalışır
+
+#### Sorun
+- Ajanlar `saasfast-backend/` ve `saasfast-frontend/` projesine müdahale ediyor, çalışan projeyi bozuyordu
+- `CodeExecutorService.InferTargetFile()` metodu komutları `frontend/src/data/agents.js`, `Backend/Application/Services/AiService.cs`, `frontend/src/components/MeetingRoom.jsx` gibi gerçek proje dosyalarına yönlendiriyordu
+- `GuessTargetFile` AI prompt'u eski proje dosyalarını listeleyerek AI'yı yanlış yönlendiriyordu
+
+#### Yapılan Değişiklikler
+
+##### 1. CodeExecutorService.cs — Guard Mekanizması
+- `ExecuteAsync()`: `generated_projects/` dışındaki tüm hedef dosyalar otomatik olarak `generated_projects/{aktif_proje}/index.html`'e yönlendirilir
+- `InferTargetFile()`: Tüm eski proje dosyası yolları kaldırıldı. Artık her zaman `generated_projects/` altına yönlendirir
+- `GuessTargetFile()` prompt'u güncellendi: eski dosya listesi kaldırıldı, yerine "sadece generated_projects/ altında çalışabilirsin" uyarısı eklendi
+- `TriggerFrontendRebuild()` metodu kaldırıldı (artık frontend değişikliği olmayacak)
+
+##### 2. generated_projects/ Dizini Oluşturuldu
+- `C:\Users\dell\multi-agent-dev-studio\generated_projects/`
+- Tüm yeni projeler bu klasör altında oluşturulacak
+
+##### 3. Container Durumu
+| Name | Image | Port | Durum |
+|------|-------|------|-------|
+| `saasfast-postgres` | `postgres:16-alpine` | 5432 | ✅ Healthy |
+| `saasfast-backend` | `saasfast-backend` | 5000 | ✅ Running |
+| `saasfast-frontend` | `saasfast-frontend` | 3000 | ✅ Running |
+
+##### 4. Pipeline (Güncel)
+```
+Kullanıcı (ses/text) → Frontend → POST /api/agent/ask
+                                    → AiService → OpencodeService
+                                    → AI yanıtı (sohbet)
+                                    → Kod komutu algılanırsa:
+                                      → CodeExecutorService.ExecuteAsync()
+                                        → Guard: generated_projects/ dışı engellenir
+                                        → Dosya generated_projects/ altında oluşturulur/güncellenir
+                                      → GET /api/command/feed (frontend poll)
+```
+
+#### Önemli Kural
+> **Ajanlar ASLA `Backend/`, `frontend/`, `Infrastructure/` veya proje kök dizinindeki dosyaları değiştiremez. Tüm kod değişiklikleri, yeni projeler ve dosyalar `generated_projects/` klasörü altında yapılır.**
 
 ---
 
@@ -650,9 +694,15 @@ Kullanıcı (ses/text) → Frontend → POST /api/agent/ask
 - ✅ Backend container başarıyla rebuild edildi
 - ✅ `docker ps` — hepsi `saasfast-` önekiyle ve çalışır durumda
 
-#### Container Durumu
-| Name | Image | Port | Durum |
-|------|-------|------|-------|
-| `saasfast-postgres` | `postgres:16-alpine` | 5432 | ❌ Durdu |
-| `saasfast-backend` | `saasfast-backend` | 5000 | ❌ Durdu |
-| `saasfast-frontend` | `saasfast-frontend` | 3000 | ❌ Durdu |
+# Memory - Oturum Özeti
+
+> **Bu dosyayı güncelleme kuralı:** Her yeni özellik, bugfix veya deployment sonrası bu dosyaya ekleme yap.
+> "projeye devam" dediğinde yapay zeka sana bu dosyayı okur ve kaldığın yerden devam eder.
+> Bilgisayarı kapattığında tekrar açıp `MEMORY.md` içindeki son durumu okuyup **"projeye devam"** yazman yeterli.
+
+## Proje: AI Software Company OS
+Multi-agent AI yazılım şirketi simülasyonu. 8 ajan, 2 oda, .NET 8 backend, React+Vite frontend, PostgreSQL, Docker.
+
+---
+
+## Oturum Geçmişi

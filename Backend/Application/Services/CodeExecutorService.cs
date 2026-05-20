@@ -84,7 +84,19 @@ namespace SaaSFast.Application.Services
                     _queue.AddLog(cmd.Id, agentId, $"Hedef dosya: {cmd.TargetFile}", "info");
                 }
 
-                var fullPath = Path.Combine(_sourceRoot, cmd.TargetFile!);
+                var normalizedTarget = cmd.TargetFile!.Replace("\\", "/");
+                if (!normalizedTarget.StartsWith(_generatedProjectsPath + "/", StringComparison.OrdinalIgnoreCase) &&
+                    !normalizedTarget.Equals(_generatedProjectsPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    _queue.AddLog(cmd.Id, agentId, $"Uyari: Ajanlar sadece generated_projects/ icinde calisabilir. '{cmd.TargetFile}' engellendi, yonlendiriliyor...", "warn");
+                    var activeProject = _memory.GetActiveProject();
+                    var projectFolder = !string.IsNullOrWhiteSpace(activeProject) ? activeProject : "yeni-proje";
+                    var fileName = Path.GetExtension(cmd.TargetFile) != "" ? Path.GetFileName(cmd.TargetFile) : "index.html";
+                    cmd.TargetFile = $"{_generatedProjectsPath}/{projectFolder}/{fileName}";
+                    _queue.AddLog(cmd.Id, agentId, $"Yeni hedef: {cmd.TargetFile}", "info");
+                }
+
+                var fullPath = Path.Combine(_sourceRoot, cmd.TargetFile);
                 _queue.AddLog(cmd.Id, agentId, $"Dosya yolu: {fullPath}", "info");
 
                 var isNewFile = !File.Exists(fullPath);
@@ -182,14 +194,6 @@ namespace SaaSFast.Application.Services
                 _performance.RecordSuccess(agentId, cmd.ChangeType ?? "edit");
                 _memory.StoreEpisodic(agentId, cmd.Text, "code_change", summary, "completed", diff.DiffText);
 
-                var isFrontendChange = cmd.TargetFile != null &&
-                    (cmd.TargetFile.StartsWith("frontend/") || cmd.TargetFile.Contains("deniz.js"));
-                if (isFrontendChange)
-                {
-                    _queue.AddLog(cmd.Id, agentId, "Frontend degisikligi tespit edildi, rebuild tetikleniyor...", "info");
-                    _ = TriggerFrontendRebuild(cmd.Id, agentId);
-                }
-
                 return new CodeExecutionResult
                 {
                     Success = true,
@@ -219,7 +223,7 @@ namespace SaaSFast.Application.Services
                 return $"{_generatedProjectsPath}/{projectName}/index.html";
             }
 
-            var prompt = $"Kullanıcı şöyle dedi: \"{text}\"\n\nBu komut hangi dosyayı değiştirmek istiyor? Sadece dosya yolunu yaz, başka bir şey yazma.\n\nProjedeki dosyalar:\n- frontend/src/data/agents.js (ajan ses ayarları, agent listesi)\n- frontend/src/components/MeetingRoom.jsx (ana UI, ses seçimi, chat)\n- Backend/Application/Services/AiService.cs (AI servisi)\n- Backend/Application/Services/CommandQueueService.cs (komut kuyruğu)";
+            var prompt = $"Kullanıcı şöyle dedi: \"{text}\"\n\nBu komut hangi dosyayı değiştirmek istiyor? Sadece dosya yolunu yaz, başka bir şey yazma.\n\nNOT: Ajanlar sadece generated_projects/ klasörü altında çalışabilir. Mevcut proje dosyalarına (Backend/, frontend/) dokunulamaz.\n\nDosya yolu her zaman generated_projects/ ile başlamalıdır. Örn: generated_projects/proje-adi/index.html";
 
             if (!string.IsNullOrWhiteSpace(_openRouterKey))
             {
@@ -344,17 +348,9 @@ namespace SaaSFast.Application.Services
                     return $"{_generatedProjectsPath}/{activeProj}/index.html";
                 return $"{_generatedProjectsPath}/yeni-proje/index.html";
             }
-            if (lower.Contains("agent") || lower.Contains("ajan") || lower.Contains("ses") || lower.Contains("voice") || lower.Contains("pitch"))
-                return "frontend/src/data/agents.js";
-            if (lower.Contains("backend") || lower.Contains("api") || lower.Contains("ai"))
-                return "Backend/Application/Services/AiService.cs";
-            if (lower.Contains("frontend") || lower.Contains("ui") || lower.Contains("meeting") || lower.Contains("room") || lower.Contains("sayfa") || lower.Contains("page") || lower.Contains("renk") || lower.Contains("başlık") || lower.Contains("arayüz"))
-                return "frontend/src/components/MeetingRoom.jsx";
-            if (lower.Contains("queue") || lower.Contains("command") || lower.Contains("kuyruk"))
-                return "Backend/Application/Services/CommandQueueService.cs";
             if (!string.IsNullOrWhiteSpace(activeProj))
                 return $"{_generatedProjectsPath}/{activeProj}/index.html";
-            return "frontend/src/components/MeetingRoom.jsx";
+            return $"{_generatedProjectsPath}/yeni-proje/index.html";
         }
 
         private string? TryExtractExplicitPath(string text)
@@ -771,41 +767,6 @@ Sadece değiştirilmiş dosyanın TAMAMINI yaz. SADECE KOD yaz, aciklama EKLEME.
                 LinesRemoved = removed,
                 DiffText = sb.ToString()
             };
-        }
-
-        private async Task TriggerFrontendRebuild(string cmdId, string agentId)
-        {
-            try
-            {
-                var psi = new ProcessStartInfo
-                {
-                    FileName = "docker",
-                    Arguments = "compose up -d --build frontend",
-                    WorkingDirectory = Path.Combine(_sourceRoot, "Infrastructure"),
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true
-                };
-                var proc = Process.Start(psi);
-                if (proc == null)
-                {
-                    _queue.AddLog(cmdId, agentId, "docker compose baslatilamadi", "warn");
-                    return;
-                }
-                var output = await proc.StandardOutput.ReadToEndAsync();
-                var error = await proc.StandardError.ReadToEndAsync();
-                await proc.WaitForExitAsync();
-
-                if (proc.ExitCode == 0)
-                    _queue.AddLog(cmdId, agentId, "Frontend yeniden build edildi, degisiklikler yansiyacak", "success");
-                else
-                    _queue.AddLog(cmdId, agentId, $"Frontend rebuild hatasi: {error[..Math.Min(150, error.Length)]}", "error");
-            }
-            catch (Exception ex)
-            {
-                _queue.AddLog(cmdId, agentId, $"Frontend rebuild hatasi: {ex.Message}", "warn");
-            }
         }
 
         private async Task RegisterProjectAsync(string filePath)

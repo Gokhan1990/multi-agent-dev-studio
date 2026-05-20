@@ -295,6 +295,32 @@ namespace SaaSFast.Presentation.Controllers
                 }
             }
 
+            // 2b. "aktif projemizin adı X" / "proje adı X" → set active project
+            if (projectCreated == null && focusProject == null && pendingProject == null)
+            {
+                var nameMatch = Regex.Match(cleanedMessage, @"(?:aktif\s+proje\w*\s+|projemizin\s+|projenin\s+)?(?:adı|adi)\s+([\w-]+(?:\s+[\w-]+)*)", RegexOptions.IgnoreCase);
+                if (nameMatch.Success)
+                {
+                    var rawName = nameMatch.Groups[1].Value.Trim();
+                    if (rawName.Length > 2)
+                    {
+                        var slug = Slugify(rawName);
+                        // Normalize: "orumcek-projesi" → "orumcekprojesi"
+                        slug = slug.Replace("-projesi", "projesi").Replace("-proje", "proje");
+                        var dbProject = await _db.Projects.FirstOrDefaultAsync(p => p.Slug == slug);
+                        if (dbProject == null)
+                        {
+                            projectCreated = await CreateProjectInDb(slug, request.Message);
+                        }
+                        else
+                        {
+                            _memory.SetActiveProject(slug);
+                            focusProject = slug;
+                        }
+                    }
+                }
+            }
+
             // 3. Focus match (odaklan, bağlan, geç) — only if no project was created above
             string? focusError = null;
             if (projectCreated == null)

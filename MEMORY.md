@@ -106,37 +106,88 @@ Multi-agent AI yazılım şirketi simülasyonu. 8 ajan, 2 oda, .NET 8 backend, R
 | Metot | Path | Açıklama |
 |---|---|---|
 | GET | /api/agent/voices | Ajan ses listesi |
-| POST | /api/agent/ask | AI sohbet |
+| POST | /api/agent/ask | AI sohbet + kod execute |
 | POST | /api/agent/chime | Moderator |
+| GET | /api/agents | Ajan listesi |
 | POST | /api/command | Sesli komut kuyruğuna ekle |
 | GET | /api/command/pending | Bekleyen komutlar |
 | GET | /api/command/activity | Aktif + son komut aktiviteleri |
 | GET | /api/command/feed | Terminal log akışı (son 100 satır) |
 | GET | /api/command/ping | Health check |
+| GET | /api/command/conversations | Konuşma geçmişi |
 | POST | /api/chat/send | Chat mesajı |
 | GET | /api/chat/history | Chat geçmişi |
-| GET | /api/agents | Ajan listesi |
+| POST | /api/ideas | Fikir gönderme |
+| POST | /api/self-improve/scan | Kod tabanını tara |
+| GET | /api/self-improve/suggestions | İyileştirme önerileri |
+| POST | /api/self-improve/apply/{id} | Öneriyi uygula |
+| POST | /api/self-improve/dismiss/{id} | Öneriyi reddet |
+| POST | /api/self-improve/auto | Otomatik mod aç/kapa |
+| GET | /api/self-improve/status | Sistem durumu |
+| GET | /api/self-improve/performance | Ajan performans tablosu |
 
 ### AI Sağlayıcılar (sırayla)
-1. **Gemini** (`gemini-2.0-flash`) — birincil
-2. **Groq** (`llama-3.3-70b-versatile`) — yedek
-3. **Fallback** — hardcoded yanıtlar
+1. **Opencode CLI** (`opencode/deepseek-v4-flash-free`) — birincil (sohbet + kod + review, ücretsiz, API anahtarı gerekmez)
+2. **OpenRouter DeepSeek** — yedek (sadece review/code fallback)
+3. **Gemini 2.0 Flash** — yedek (şu an 429 quota limit)
+4. **Groq llama-3.3-70b** — yedek (şu an 429 rate limit)
 
-### API Anahtarları (`.env`)
-- Gemini, Groq, OpenRouter anahtarları mevcut
+### API Anahtarları
+- `.env` dosyası **mevcut değil** — opencode CLI ücretsiz çalıştığı için API anahtarı gerekmiyor
+- Gemini, Groq, OpenRouter anahtarları eski, hepsi tükenmiş/429
 
 ### Dosyalar (önemli referanslar)
 | Dosya | Ne işe yarar |
 |---|---|
-| `Backend/Program.cs:22` | `CommandQueueService` singleton registration |
+| `Backend/Program.cs` | DI register: tüm servisler singleton/HttpClient |
 | `Backend/Presentation/Controllers/CommandController.cs` | Command API endpoints |
+| `Backend/Presentation/Controllers/SelfImprovementController.cs` | Self-improvement endpoints |
+| `Backend/Presentation/Controllers/AgentChatController.cs` | AI sohbet + kod execute |
+| `Backend/Presentation/Controllers/ChatController.cs` | Chat mesajı gönderme/geçmiş |
+| `Backend/Presentation/Controllers/AgentController.cs` | Ajan listesi |
+| `Backend/Presentation/Controllers/IdeasController.cs` | Fikir yönetimi |
+| `Backend/Presentation/Controllers/AgentAbilityController.cs` | Ajan yetenek yönetimi |
 | `Backend/Application/Services/CommandQueueService.cs` | Queue yönetimi, step tracking |
+| `Backend/Application/Services/AiService.cs` | AI sohbet (sadece OpencodeService, HTTP API'ler kaldırıldı) |
+| `Backend/Application/Services/CodeExecutorService.cs` | Kod değişikliği execute + diff |
+| `Backend/Application/Services/CodeReviewService.cs` | DeepSeek ile kod review |
+| `Backend/Application/Services/AgentMemoryService.cs` | Konuşma loglama + context enjekte |
+| `Backend/Application/Services/AgentPerformanceTracker.cs` | Ajan başarı/başarısızlık takibi |
+| `Backend/Application/Services/SelfImprovementService.cs` | Otomatik kod tarama + iyileştirme |
+| `Backend/Application/Services/OpencodeService.cs` | opencode CLI wrapper (stdin Process) |
+| `Backend/Application/Services/OrchestratorService.cs` | Ajan orkestrasyonu |
+| `Backend/Application/Services/AgentRouterService.cs` | Mesaj routing |
+| `Backend/Application/Services/AgentAbilityService.cs` | Ajan yetenek yönetimi |
+| `Backend/Application/Services/AgentTrainingService.cs` | Ajan eğitimi |
+| `Backend/Application/Services/AgentRegistry.cs` | Ajan kayıt defteri |
+| `Backend/Application/Services/VoiceService.cs` | Ses yönetimi |
+| `Backend/Domain/Entities/Agent.cs` | Agent entity |
+| `Backend/Domain/Entities/ChatMessage.cs` | Chat mesaj entity |
+| `Backend/Domain/Entities/Idea.cs` | Fikir entity |
+| `Backend/Domain/Entities/Project.cs` | Proje entity |
+| `Backend/Domain/Entities/Room.cs` | Oda entity |
 | `frontend/src/components/MeetingRoom.jsx` | Ana UI: voice, command, activity feed |
-| `frontend/src/components/ActivityTerminal.jsx` | Terminal-style Bora aktivite akışı |
+| `frontend/src/components/ActivityTerminal.jsx` | Terminal-style aktivite akışı |
+| `frontend/src/components/SelfImprovementPanel.jsx` | Self-improvement dashboard |
+| `frontend/src/components/AgentCard.jsx` | Ajan kart bileşeni |
+| `frontend/src/components/AgentGrid.jsx` | Ajan grid görünümü |
+| `frontend/src/components/ErrorBoundary.jsx` | Hata sınırı bileşeni |
+| `frontend/src/pages/Home.jsx` | Ana sayfa |
+| `frontend/src/data/agents.js` | Ajan verileri + getVoiceId |
+| `frontend/src/data/responses.js` | AI yanıt routing + keyword eşleme |
+| `frontend/src/data/deniz.js` | Deniz'e özel veri |
+| `frontend/src/i18n.js` | Dil desteği |
 | `frontend/nginx.conf` | Proxy `/api/` → backend-api:8080 |
-| `Infrastructure/docker-compose.yml` | Volume `../Commands:/commands` |
-| `Commands/queue.json` | Paylaşılan kuyruk dosyası |
-| `AgentMemory/` | Agent logları, index, eventler |
+| `Infrastructure/docker-compose.yml` | 3 servis: postgres, backend-api, frontend |
+| `watch_commands.ps1` | opencode CLI watcher |
+| `watchdog.ps1` | Watcher crash koruması |
+| `start_watcher.ps1` | Watcher+watchdog başlatma |
+| `engine_order.md` | Engineering Room çalışma sırası |
+| `masterprompt.txt` | CEO orchestrator sistem promptu |
+| `masterplan.txt` | Yüksek seviye mimari plan |
+| `.anchored-summary.md` | opencode CLI geçiş özeti |
+| `Tests/` | 11 test dosyası |
+| `Backend.Tests/` | 6 test dosyası |
 
 ---
 
@@ -206,6 +257,14 @@ docker tag saasfast-backend-direct testprojem-backend-api
 docker tag saasfast-frontend-direct testprojem-frontend
 cd Infrastructure; docker compose up -d
 ```
+
+## Watcher Başlatma
+```powershell
+.\start_watcher.ps1
+```
+- Watcher + watchdog otomatik başlar
+- `Commands/queue.json`'u poll eder
+- opencode CLI ile kod değişikliği yapar
 
 ## Devam Etmek İçin
 Tekrar geldiğinde bana şunu söyle: **"projeye devam"**
@@ -410,6 +469,79 @@ AI kod üret → Code Review (DeepSeek)
 
 ---
 
+---
+
+### Oturum 13 (2026-05-20) — Proje Taraması & MEMORY.md Güncelleme
+
+#### Tespit Edilen Eksik/Eski Bilgiler
+
+##### 1. Container Durumu — GÜNCEL DEĞİL
+- MEMORY.md'de `✅ Healthy/Running` yazıyordu ancak **tüm container'lar durmuş durumda**
+- `docker ps` → hiçbir container çalışmıyor
+
+##### 2. AI Sağlayıcı — KÖKLÜ DEĞİŞİKLİK
+- **OpencodeService.cs** eklendi: `opencode run` komutunu `Process` ile stdin üzerinden çağırır
+- **AiService.cs** temizlendi: tüm HTTP API key kodları kaldırıldı (`TryOpenRouter`, `TryGemini`, `TryGroq`)
+- Artık sadece OpencodeService kullanılıyor — API anahtarları gerekmiyor
+- Gemini/Groq/OpenRouter yedek olarak kalmış ama hepsi tükenmiş durumda (429/zero balance)
+
+##### 3. Yeni Servisler (MEMORY.md'de Eksik)
+| Servis | Görevi |
+|---|---|
+| **OpencodeService** | opencode CLI wrapper — Process ile stdin prompt, stdout parse |
+| **OrchestratorService** | Ajan orkestrasyonu, konuşma sırası yönetimi |
+| **AgentRouterService** | Mesajları doğru ajana yönlendirme |
+| **AgentAbilityService** | Ajan yeteneklerini yönetme |
+| **AgentTrainingService** | Ajan eğitim verileri |
+| **AgentRegistry** | Ajan kayıt defteri |
+
+##### 4. Yeni Controller'lar (MEMORY.md'de Eksik)
+| Controller | Görevi |
+|---|---|
+| **IdeasController** | Fikir gönderme/yönetme |
+| **AgentAbilityController** | Ajan yetenek endpoint'leri |
+
+##### 5. Yeni Domain Entity'ler (MEMORY.md'de Eksik)
+- `Agent.cs`, `Idea.cs`, `Project.cs`, `Room.cs`
+
+##### 6. Yeni Frontend Bileşenler (MEMORY.md'de Eksik)
+- `AgentCard.jsx`, `AgentGrid.jsx`, `ErrorBoundary.jsx`, `Home.jsx`
+- `App.jsx`, `i18n.js`, `deniz.js`
+
+##### 7. Yeni Proje Dosyaları (MEMORY.md'de Eksik)
+- `engine_order.md` — Engineering Room execution order
+- `masterprompt.txt` — CEO orchestrator master prompt (243 satır)
+- `masterplan.txt` — Yüksek seviye mimari plan
+- `start_watcher.ps1` — Watcher+watchdog başlatma scripti
+- `.anchored-summary.md` — opencode CLI geçiş özeti
+- `watchdog.ps1` — Watcher crash koruması (watch_commands.ps1 ile birlikte çalışır)
+
+##### 8. Test Dosyaları (MEMORY.md'de Eksik)
+- **Tests/**: 11 test dosyası (AgentChatController, CommandController, CodeExecutorService, SelfImprovementController, vb.)
+- **Backend.Tests/**: 6 test dosyası (CommandQueueService, OrchestratorService, VoiceService, vb.)
+- Toplam **17 test dosyası** (51 xUnit test)
+
+##### 9. Eksik Dizinler (Dökümante Edilmiş Ama Mevcut Değil)
+| Dizin | Durum |
+|---|---|
+| `Commands/` | ❌ **Mevcut değil** — queue.json burada olmalı |
+| `AgentMemory/` | ❌ **Mevcut değil** — conversation log, episodic memory, eventler |
+| `generated_projects/` | ❌ **Mevcut değil** — agent prompt'larda referans ediliyor |
+| `.env` | ❌ **Mevcut değil** — API anahtarları (artık gerekmiyor) |
+
+##### 10. Pipeline (Güncel — opencode CLI Merkezli)
+```
+Kullanıcı (ses/text) → Frontend → POST /api/agent/ask
+                                    → AiService → OpencodeService.AskAsync()
+                                    → opencode CLI (deepseek v4 flash free)
+                                    → AI yanıtı
+                                    → CodeExecutorService (gerekliyse)
+                                    → Kod değişikliği + diff
+                                    → GET /api/command/feed (frontend poll)
+```
+
+---
+
 ### Sıradaki Yapılacaklar (plan)
 1. ~~Log satırlarındaki ANSI escape kodlarını temizle~~ ✅
 2. ~~Watcher'da PowerShell hata mesajlarını filtrele~~ ✅
@@ -419,6 +551,11 @@ AI kod üret → Code Review (DeepSeek)
 6. ~~CodeExecutorService DI + DeepSeek + terminal gereksiz kod değişikliği~~ ✅
 7. ~~Self-Improvement: Code Review + Performance + Self-Correction~~ ✅
 8. ~~Conversation Log + Agent Context + Auto Deploy~~ ✅
+9. ❌ **Acil: Container'ları yeniden ayağa kaldır** (hepsi durmuş durumda)
+10. ❌ **Commands/ dizinini oluştur** (queue.json kaybolmuş, watcher çalışmaz)
+11. ❌ **AgentMemory/ dizinini oluştur** (conversation log, episodic memory, eventler için)
+12. ❌ **generated_projects/ dizinini oluştur** (agent prompt'larda referans ediliyor)
+13. ❌ **OpencodeService.cs doğrulama** — opencode CLI container içinde `/usr/bin/opencode` yolunda mı?
 
 ---
 
@@ -516,6 +653,6 @@ AI kod üret → Code Review (DeepSeek)
 #### Container Durumu
 | Name | Image | Port | Durum |
 |------|-------|------|-------|
-| `saasfast-postgres` | `postgres:16-alpine` | 5432 | ✅ Healthy |
-| `saasfast-backend` | `saasfast-backend` | 5000 | ✅ Running |
-| `saasfast-frontend` | `saasfast-frontend` | 3000 | ✅ Running |
+| `saasfast-postgres` | `postgres:16-alpine` | 5432 | ❌ Durdu |
+| `saasfast-backend` | `saasfast-backend` | 5000 | ❌ Durdu |
+| `saasfast-frontend` | `saasfast-frontend` | 3000 | ❌ Durdu |

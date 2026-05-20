@@ -149,7 +149,59 @@ namespace SaaSFast.Presentation.Controllers
             if (lower.Contains("md dosya"))
                 return true;
 
+            // "dosya" referenced with a write verb (doldur, yaz, etc.) — assume .md in generated_projects
+            if (lower.Contains("dosya") || lower.Contains("dosyayı") || lower.Contains("dosyası"))
+                return true;
+
             return false;
+        }
+
+        private async Task<string?> AutoCreateMdFromResponse(string content, string? activeProject)
+        {
+            var lower = content.ToLowerInvariant();
+            var activeSlug = activeProject ?? _memory.GetActiveProject();
+            if (string.IsNullOrWhiteSpace(activeSlug) && !lower.Contains("generated_projects"))
+                return null;
+
+            // Pattern: generated_projects/{project}/{file}.md
+            var explicitMatch = Regex.Match(lower, @"generated_projects/([\w-]+)/([\w-]+\.md)\b");
+            if (explicitMatch.Success)
+            {
+                var project = explicitMatch.Groups[1].Value;
+                var fileName = explicitMatch.Groups[2].Value;
+                var fullDir = Path.Combine(Directory.GetCurrentDirectory(), "generated_projects", project);
+                var fullPath = Path.Combine(fullDir, fileName);
+                if (!Directory.Exists(fullDir)) Directory.CreateDirectory(fullDir);
+                if (!System.IO.File.Exists(fullPath))
+                {
+                    var displayName = string.Join(' ', Path.GetFileNameWithoutExtension(fileName).Split('-', '_')
+                        .Select(w => w.Length > 0 ? char.ToUpper(w[0]) + w[1..] : w));
+                    await System.IO.File.WriteAllTextAsync(fullPath, $"# {displayName}\n\n## Icerik\n{content}\n\n## Notlar\n-");
+                    return $"generated_projects/{project}/{fileName}";
+                }
+            }
+
+            // Pattern: mentions .md filename and active project exists
+            if (!string.IsNullOrWhiteSpace(activeSlug))
+            {
+                var mdFileMatch = Regex.Match(lower, @"([\w-]+\.md)\b");
+                if (mdFileMatch.Success)
+                {
+                    var fileName = mdFileMatch.Groups[1].Value;
+                    var fullDir = Path.Combine(Directory.GetCurrentDirectory(), "generated_projects", activeSlug);
+                    var fullPath = Path.Combine(fullDir, fileName);
+                    if (!Directory.Exists(fullDir)) Directory.CreateDirectory(fullDir);
+                    if (!System.IO.File.Exists(fullPath))
+                    {
+                        var displayName = string.Join(' ', Path.GetFileNameWithoutExtension(fileName).Split('-', '_')
+                            .Select(w => w.Length > 0 ? char.ToUpper(w[0]) + w[1..] : w));
+                        await System.IO.File.WriteAllTextAsync(fullPath, $"# {displayName}\n\n## Icerik\n{content}\n\n## Notlar\n-");
+                        return $"generated_projects/{activeSlug}/{fileName}";
+                    }
+                }
+            }
+
+            return null;
         }
 
         private static bool IsCorrection(string lowerMessage)
@@ -368,16 +420,24 @@ namespace SaaSFast.Presentation.Controllers
                     ? $"İşimi bitirdim. {execResult.Summary}"
                     : $"İşlem başarısız oldu. {execResult.Error}";
                 response["completionAgentId"] = request.AgentId;
+            }
 
-                if (result != null)
+            // AI yanitinda generated_projects/ altinda .md yolu gecerse otomatik olustur
+            if (!isCodeChange && !string.IsNullOrWhiteSpace(content))
+            {
+                var autoMd = await AutoCreateMdFromResponse(content, focusProject ?? projectCreated);
+                if (autoMd != null)
                 {
-                    _memory.StoreConversation(request.Message, request.AgentId, result.Content, request.Room, true,
-                        execResult.Success ? execResult.Summary : execResult.Error ?? "basarisiz");
+                    response["autoFileCreated"] = autoMd;
+                    content += $"\n\n✅ `{autoMd}` dosyasi otomatik olusturuldu.";
+                    response["content"] = content;
                 }
             }
-            else if (result != null)
+
+            if (result != null)
             {
-                _memory.StoreConversation(request.Message, request.AgentId, result.Content, request.Room, false);
+                var hadChange = isCodeChange || response.ContainsKey("autoFileCreated");
+                _memory.StoreConversation(request.Message, request.AgentId, result.Content, request.Room, hadChange);
             }
 
             return Ok(response);

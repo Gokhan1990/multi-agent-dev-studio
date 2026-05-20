@@ -27,7 +27,8 @@ namespace SaaSFast.Presentation.Controllers
             "indir", "yükle", "kur", "çalıştır",
             "dene", "test", "düzenle", "göster",
             "oku", "sorgula",
-            "ekleme", "güncelleme", "silme"
+            "ekleme", "güncelleme", "silme",
+            "doldur"
         };
 
         private static bool IsExplicitCodeCommand(string message)
@@ -72,11 +73,83 @@ namespace SaaSFast.Presentation.Controllers
 
         private static bool IsProjectCreateConfirmation(string lowerMessage)
         {
-            var confirmWords = new[] { "evet", "oluştur", "tamam", "olur", "yap", "aç", "create", "yes", "ok" };
+            var confirmWords = new[] { "evet", "tamam", "olur", "aç", "create", "yes", "ok" };
             return confirmWords.Any(w => lowerMessage.Contains(w))
                 && !lowerMessage.Contains("odaklan")
                 && !lowerMessage.Contains("araştır")
                 && !lowerMessage.Contains("sil");
+        }
+
+        private static string? TryExtractProjectCreationName(string msg)
+        {
+            // Pattern: "X projesi oluştur/yap/başlat/kur/hazırla" or "X projesini oluştur"
+            var m1 = Regex.Match(msg, @"([\w-]+(?:_[\w-]+)*)\s*(?:projesi|projesine|proje|projeyi|projesini)\s+(?:adı\s*altında\s*bir\s*proje\s*)?(?:oluştur|yap|başlat|kur|hazırla|yapalım|oluşturalım|başlatalım|kuralım|hazırlayalım)", RegexOptions.IgnoreCase);
+            if (m1.Success)
+            {
+                var raw = m1.Groups[1].Value;
+                return raw.EndsWith("projesi", StringComparison.OrdinalIgnoreCase) ? raw : raw + "_projesi";
+            }
+
+            // Pattern: "X adı altında bir proje oluştur" (where X doesn't have "projesi")
+            var m2 = Regex.Match(msg, @"([\w-]+(?:_[\w-]+)*)\s+(?:adı|adi)\s*altında\s*bir\s*proje\s*(?:oluştur|yap|başlat|kur|hazırla|yapalım|oluşturalım|başlatalım|kuralım|hazırlayalım)", RegexOptions.IgnoreCase);
+            if (m2.Success)
+            {
+                var raw = m2.Groups[1].Value;
+                return raw.EndsWith("projesi", StringComparison.OrdinalIgnoreCase) ? raw : raw + "_projesi";
+            }
+
+            // Pattern: "X projesi yapalım" (bare project name before creation verb)
+            var m3 = Regex.Match(msg, @"([\w-]+(?:projesi|proje))\s+(?:yapalım|yapalim|oluşturalım|olusturalim|başlatalım|baslatalim|kuralım|kurallim|hazırlayalım|hazirlayalim)\b", RegexOptions.IgnoreCase);
+            if (m3.Success)
+            {
+                var raw = m3.Groups[1].Value;
+                return raw.EndsWith("projesi", StringComparison.OrdinalIgnoreCase) ? raw : raw + "_projesi";
+            }
+
+            return null;
+        }
+
+        private async Task<string> CreateProjectInDb(string slug, string userMessage)
+        {
+            var displayName = string.Join(' ', slug.Split('-', '_')
+                .Select(w => w.Length > 0 ? char.ToUpper(w[0]) + w[1..] : w));
+
+            _db.Projects.Add(new SaaSFast.Domain.Entities.Project
+            {
+                Name = displayName,
+                Slug = slug,
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow,
+                Status = "active"
+            });
+            await _db.SaveChangesAsync();
+            _memory.SetActiveProject(slug);
+
+            var fullDir = Path.Combine(Directory.GetCurrentDirectory(), "generated_projects", slug);
+            var fullPath = Path.Combine(fullDir, $"{slug}.md");
+            if (!Directory.Exists(fullDir)) Directory.CreateDirectory(fullDir);
+            if (!System.IO.File.Exists(fullPath))
+            {
+                var mdContent = $"# {displayName}\n\n## Proje Amaci\n{userMessage}\n\n## Hedefler\n-\n\n## Notlar\n-";
+                await System.IO.File.WriteAllTextAsync(fullPath, mdContent);
+            }
+
+            return slug;
+        }
+
+        private static bool MessageTargetsMdInGenerated(string message)
+        {
+            var lower = message.ToLowerInvariant();
+
+            // Explicit .md filename reference
+            if (Regex.IsMatch(lower, @"[\w-]+\.md\b"))
+                return true;
+
+            // "md dosya" / "md dosyası" pattern
+            if (lower.Contains("md dosya"))
+                return true;
+
+            return false;
         }
 
         private static bool IsCorrection(string lowerMessage)
@@ -143,63 +216,64 @@ namespace SaaSFast.Presentation.Controllers
             string? pendingProject = _memory.GetPendingProject();
             string? projectCreated = null;
 
+            // 1. Pending project confirmation
             if (pendingProject != null && IsProjectCreateConfirmation(lowerMessage))
             {
-                var displayName = string.Join(' ', pendingProject.Split('-', '_')
-                    .Select(w => w.Length > 0 ? char.ToUpper(w[0]) + w[1..] : w));
-                _db.Projects.Add(new SaaSFast.Domain.Entities.Project
-                {
-                    Name = displayName,
-                    Slug = pendingProject,
-                    CreatedAt = DateTime.UtcNow,
-                    UpdatedAt = DateTime.UtcNow,
-                    Status = "active"
-                });
-                await _db.SaveChangesAsync();
-                _memory.SetActiveProject(pendingProject);
-                projectCreated = pendingProject;
                 _memory.ClearPendingProject();
-
-                var mdDir = Path.Combine("generated_projects", projectCreated);
-                var mdFile = Path.Combine(mdDir, $"{projectCreated}.md");
-                var fullDir = Path.Combine(Directory.GetCurrentDirectory(), mdDir);
-                var fullPath = Path.Combine(Directory.GetCurrentDirectory(), mdFile);
-                if (!Directory.Exists(fullDir)) Directory.CreateDirectory(fullDir);
-                if (!System.IO.File.Exists(fullPath))
-                {
-                    var displayMdName = string.Join(' ', projectCreated.Split('-', '_').Select(w => w.Length > 0 ? char.ToUpper(w[0]) + w[1..] : w));
-                    var mdContent = $"# {displayMdName}\n\n## Proje Amaci\n{request.Message}\n\n## Hedefler\n-\n\n## Notlar\n-";
-                    await System.IO.File.WriteAllTextAsync(fullPath, mdContent);
-                }
+                projectCreated = await CreateProjectInDb(pendingProject, request.Message);
             }
 
-            var focusMatch = Regex.Match(cleanedMessage, @"([\w-]+(?:_[\w-]+)*)\s*(?:projesi|projesine|proje|projeye|focus)?\s*(?:ne|a|e|ye|ya|)?\s*(?:odaklan|bağlan|baglan|geç|gec)", RegexOptions.IgnoreCase);
-            string? focusError = null;
-            if (projectCreated == null && focusMatch.Success)
+            // 2. Direct project creation (user provides name + verb in same message)
+            if (projectCreated == null && pendingProject == null)
             {
-                var rawName = focusMatch.Groups[1].Value;
-                rawName = Regex.Replace(rawName, @"_(projesi|projesine|proje|projeye)$", "", RegexOptions.IgnoreCase);
-                if (Regex.IsMatch(cleanedMessage, @"\s+projesi|\s+projesine|\s+proje\b|\s+projeye", RegexOptions.IgnoreCase)
-                    && !rawName.Contains("projesi", StringComparison.OrdinalIgnoreCase))
-                    rawName += "_projesi";
-                focusProject = Slugify(rawName);
-
-                var dbProject = await _db.Projects.FirstOrDefaultAsync(p => p.Slug == focusProject);
-                if (dbProject == null)
+                var directName = TryExtractProjectCreationName(cleanedMessage);
+                if (directName != null)
                 {
-                    _memory.SetPendingProject(focusProject);
-                    focusError = lang
-                        ? $"Proje \"{focusProject}\" bulunamadı. generated_projects/{focusProject}/ yolunda oluşturayım mı? (Evet derseniz oluşturup odaklanırım)"
-                        : $"Project \"{focusProject}\" not found. Create at generated_projects/{focusProject}/? (Say yes to create and focus)";
-                    focusProject = null;
-                }
-                else
-                {
-                    _memory.ClearPendingProject();
-                    _memory.SetActiveProject(focusProject);
+                    var slug = Slugify(directName);
+                    var dbProject = await _db.Projects.FirstOrDefaultAsync(p => p.Slug == slug);
+                    if (dbProject == null)
+                    {
+                        projectCreated = await CreateProjectInDb(slug, request.Message);
+                    }
+                    else
+                    {
+                        _memory.SetActiveProject(slug);
+                        focusProject = slug;
+                    }
                 }
             }
-            else if (focusMatch.Success && projectCreated != null)
+
+            // 3. Focus match (odaklan, bağlan, geç) — only if no project was created above
+            string? focusError = null;
+            if (projectCreated == null)
+            {
+                var focusMatch = Regex.Match(cleanedMessage, @"([\w-]+(?:_[\w-]+)*)\s*(?:projesi|projesine|proje|projeye|focus)?\s*(?:ne|a|e|ye|ya|)?\s*(?:odaklan|bağlan|baglan|geç|gec)", RegexOptions.IgnoreCase);
+                if (focusMatch.Success)
+                {
+                    var rawName = focusMatch.Groups[1].Value;
+                    rawName = Regex.Replace(rawName, @"_(projesi|projesine|proje|projeye)$", "", RegexOptions.IgnoreCase);
+                    if (Regex.IsMatch(cleanedMessage, @"\s+projesi|\s+projesine|\s+proje\b|\s+projeye", RegexOptions.IgnoreCase)
+                        && !rawName.Contains("projesi", StringComparison.OrdinalIgnoreCase))
+                        rawName += "_projesi";
+                    focusProject = Slugify(rawName);
+
+                    var dbProject = await _db.Projects.FirstOrDefaultAsync(p => p.Slug == focusProject);
+                    if (dbProject == null)
+                    {
+                        _memory.SetPendingProject(focusProject);
+                        focusError = lang
+                            ? $"Proje \"{focusProject}\" bulunamadı. generated_projects/{focusProject}/ yolunda oluşturayım mı? (Evet derseniz oluşturup odaklanırım)"
+                            : $"Project \"{focusProject}\" not found. Create at generated_projects/{focusProject}/? (Say yes to create and focus)";
+                        focusProject = null;
+                    }
+                    else
+                    {
+                        _memory.ClearPendingProject();
+                        _memory.SetActiveProject(focusProject);
+                    }
+                }
+            }
+            else
             {
                 focusProject = projectCreated;
                 _memory.ClearPendingProject();
@@ -254,14 +328,18 @@ namespace SaaSFast.Presentation.Controllers
             if (focusProject != null)
                 response["activeProject"] = focusProject;
 
-            // Strateji Odasi ajanlari (ceo, product, research, architect) ASLA kod yazamaz
+            // Strateji Odasi ajanlari (ceo, product, research, architect) varsayilan olarak kod yazamaz
             var strategyRoomAgents = new[] { "ceo", "product", "research", "architect" };
             var isStrategyAgent = strategyRoomAgents.Contains(request.AgentId);
 
             // Proje adi soruluyorsa veya onay bekleniyorsa kod calistirma
             var awaitingProjectName = focusError != null || (pendingProject != null && projectCreated == null);
 
-            var isCodeChange = IsExplicitCodeCommand(request.Message) && !isCorrection && !isStrategyAgent && !awaitingProjectName;
+            var isCodeChange = IsExplicitCodeCommand(request.Message) && !isCorrection && !awaitingProjectName;
+
+            // Strateji ajanlari sadece generated_projects/ altinda .md dosyasi olusturabilir
+            if (isStrategyAgent && isCodeChange && !MessageTargetsMdInGenerated(request.Message))
+                isCodeChange = false;
 
             if (isCodeChange)
             {

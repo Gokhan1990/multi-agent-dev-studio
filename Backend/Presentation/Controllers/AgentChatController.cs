@@ -159,6 +159,18 @@ namespace SaaSFast.Presentation.Controllers
                 _memory.SetActiveProject(pendingProject);
                 projectCreated = pendingProject;
                 _memory.ClearPendingProject();
+
+                var mdDir = Path.Combine("generated_projects", projectCreated);
+                var mdFile = Path.Combine(mdDir, $"{projectCreated}.md");
+                var fullDir = Path.Combine(Directory.GetCurrentDirectory(), mdDir);
+                var fullPath = Path.Combine(Directory.GetCurrentDirectory(), mdFile);
+                if (!Directory.Exists(fullDir)) Directory.CreateDirectory(fullDir);
+                if (!System.IO.File.Exists(fullPath))
+                {
+                    var displayMdName = string.Join(' ', projectCreated.Split('-', '_').Select(w => w.Length > 0 ? char.ToUpper(w[0]) + w[1..] : w));
+                    var mdContent = $"# {displayMdName}\n\n## Proje Amaci\n{request.Message}\n\n## Hedefler\n-\n\n## Notlar\n-";
+                    await System.IO.File.WriteAllTextAsync(fullPath, mdContent);
+                }
             }
 
             var focusMatch = Regex.Match(cleanedMessage, @"([\w-]+(?:_[\w-]+)*)\s*(?:projesi|projesine|proje|projeye|focus)?\s*(?:ne|a|e|ye|ya|)?\s*(?:odaklan|bağlan|baglan|geç|gec)", RegexOptions.IgnoreCase);
@@ -246,7 +258,10 @@ namespace SaaSFast.Presentation.Controllers
             var strategyRoomAgents = new[] { "ceo", "product", "research", "architect" };
             var isStrategyAgent = strategyRoomAgents.Contains(request.AgentId);
 
-            var isCodeChange = IsExplicitCodeCommand(request.Message) && !isCorrection && !isStrategyAgent;
+            // Proje adi soruluyorsa veya onay bekleniyorsa kod calistirma
+            var awaitingProjectName = focusError != null || (pendingProject != null && projectCreated == null);
+
+            var isCodeChange = IsExplicitCodeCommand(request.Message) && !isCorrection && !isStrategyAgent && !awaitingProjectName;
 
             if (isCodeChange)
             {

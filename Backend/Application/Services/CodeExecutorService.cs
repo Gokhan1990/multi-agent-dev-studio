@@ -344,13 +344,12 @@ namespace SaaSFast.Application.Services
             var activeProj = _memory.GetActiveProject();
             if (IsNewProjectRequest(lower))
             {
-                if (!string.IsNullOrWhiteSpace(activeProj))
-                    return $"{_generatedProjectsPath}/{activeProj}/index.html";
-                return $"{_generatedProjectsPath}/yeni-proje/index.html";
+                var projectName = !string.IsNullOrWhiteSpace(activeProj) ? activeProj : ExtractProjectName(text);
+                return $"{_generatedProjectsPath}/{projectName}/{projectName}.md";
             }
             if (!string.IsNullOrWhiteSpace(activeProj))
-                return $"{_generatedProjectsPath}/{activeProj}/index.html";
-            return $"{_generatedProjectsPath}/yeni-proje/index.html";
+                return $"{_generatedProjectsPath}/{activeProj}/{activeProj}.md";
+            return $"{_generatedProjectsPath}/yeni-proje/yeni-proje.md";
         }
 
         private string? TryExtractExplicitPath(string text)
@@ -365,7 +364,7 @@ namespace SaaSFast.Application.Services
             if (genProjectsMatch.Success)
             {
                 var path = genProjectsMatch.Groups[1].Value;
-                if (path.Contains('/') && mdMatch.Success && !mdMatch.Value.StartsWith("index"))
+                if (path.Contains('/') && mdMatch.Success)
                 {
                     var folder = path;
                     var file = mdMatch.Groups[1].Value;
@@ -375,10 +374,10 @@ namespace SaaSFast.Application.Services
                     return $"{_generatedProjectsPath}/{path}";
                 var name = path;
                 if (name.Length > 0 && name != "yeni-proje")
-                    return $"{_generatedProjectsPath}/{name}/index.html";
+                    return $"{_generatedProjectsPath}/{name}/{name}.md";
             }
 
-            if (mdMatch.Success && !mdMatch.Value.StartsWith("index"))
+            if (mdMatch.Success)
             {
                 var fileName = mdMatch.Groups[1].Value;
                 if (!string.IsNullOrWhiteSpace(activeProj))
@@ -393,8 +392,8 @@ namespace SaaSFast.Application.Services
                 if (name.Length > 0 && !name.Contains("proje"))
                 {
                     if (!string.IsNullOrWhiteSpace(activeProj))
-                        return $"{_generatedProjectsPath}/{activeProj}/index.html";
-                    return $"{_generatedProjectsPath}/{name}/index.html";
+                        return $"{_generatedProjectsPath}/{activeProj}/{activeProj}.md";
+                    return $"{_generatedProjectsPath}/{name}/{name}.md";
                 }
             }
 
@@ -479,11 +478,22 @@ namespace SaaSFast.Application.Services
             _queue.AddLog(cmdId, "agent", "Opencode ile kod değişikliği çağrılıyor...", "info");
 
             var ext = Path.GetExtension(filePath).ToLowerInvariant();
-            var isNewProject = filePath.StartsWith(_generatedProjectsPath) && string.IsNullOrEmpty(oldContent) && ext != ".md";
+            var isNewProjectMd = filePath.EndsWith(".md", StringComparison.OrdinalIgnoreCase) && string.IsNullOrEmpty(oldContent) && filePath.StartsWith(_generatedProjectsPath);
+            var isNewWebProject = filePath.StartsWith(_generatedProjectsPath) && string.IsNullOrEmpty(oldContent) && ext != ".md";
 
-            if (isNewProject)
+            if (isNewProjectMd)
             {
-                _queue.AddLog(cmdId, "agent", "Yeni proje oluşturuluyor...", "info");
+                _queue.AddLog(cmdId, "agent", "Yeni proje dokumantasyonu oluşturuluyor...", "info");
+                var dir = Path.GetDirectoryName(Path.Combine(_sourceRoot, filePath));
+                if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+                var fileName = Path.GetFileNameWithoutExtension(filePath);
+                var displayName = string.Join(' ', fileName.Split('-', '_').Select(w => w.Length > 0 ? char.ToUpper(w[0]) + w[1..] : w));
+                return $"# {displayName}\n\n## Proje Amaci\n{command}\n\n## Hedefler\n-\n\n## Notlar\n-";
+            }
+
+            if (isNewWebProject)
+            {
+                _queue.AddLog(cmdId, "agent", "Yeni web projesi oluşturuluyor...", "info");
                 var fullProjectPath = Path.Combine(_sourceRoot, Path.GetDirectoryName(filePath)!);
                 var projectPrompt = $@"Yeni bir web sitesi/proje oluşturmam gerekiyor.
 

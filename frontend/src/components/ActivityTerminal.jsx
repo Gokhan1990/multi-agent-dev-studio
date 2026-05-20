@@ -31,21 +31,43 @@ function getAgentName(agentId, lang) {
   return agent ? getAgentField(agent, 'name', lang) : agentId
 }
 
-export default function ActivityTerminal({ lang }) {
+export default function ActivityTerminal({ lang, speakingAgentId, activeProject }) {
   const [lines, setLines] = useState([])
+  const [activeAgentIds, setActiveAgentIds] = useState([])
   const terminalRef = useRef(null)
   const prevLenRef = useRef(0)
+  const speakingRef = useRef(speakingAgentId)
+  speakingRef.current = speakingAgentId
 
   useEffect(() => {
     const poll = async () => {
+      const ids = new Set()
+      if (speakingRef.current) ids.add(speakingRef.current)
       try {
-        const res = await fetch('/api/command/feed?count=200')
-        if (!res.ok) return
-        const data = await res.json()
-        if (Array.isArray(data) && data.length > 0) {
-          setLines(data.reverse())
+        const feedRes = await fetch('/api/command/feed?count=200')
+        if (feedRes.ok) {
+          const data = await feedRes.json()
+          if (Array.isArray(data) && data.length > 0) {
+            setLines(data.reverse())
+          }
+        }
+        const actRes = await fetch('/api/command/activity')
+        if (actRes.ok) {
+          const act = await actRes.json()
+          const activeCmds = Array.isArray(act.active) ? act.active : (act.active ? [act.active] : [])
+          for (const cmd of activeCmds) {
+            if (cmd.activeAgentId) ids.add(cmd.activeAgentId)
+          }
+          if (Array.isArray(act.recent)) {
+            for (const cmd of act.recent) {
+              if (cmd.status === 'processing' && cmd.activeAgentId) {
+                ids.add(cmd.activeAgentId)
+              }
+            }
+          }
         }
       } catch { }
+      setActiveAgentIds(Array.from(ids))
     }
     poll()
     const interval = setInterval(poll, 1500)
@@ -60,10 +82,13 @@ export default function ActivityTerminal({ lang }) {
   }, [lines.length])
 
   if (lines.length === 0) {
+    const activeNames = activeAgentIds.map(id => getAgentName(id, lang)).filter(Boolean)
     return (
       <div className="bg-[#0d1117] rounded-2xl border border-[#30363d] p-3 font-mono text-xs text-[#8b949e] h-48 flex items-center justify-center select-none">
         <span className="animate-pulse">
-          {lang === 'tr' ? 'Ajanlar bekliyor...' : 'Agents waiting...'}
+          {activeNames.length > 0
+            ? (lang === 'tr' ? `${activeNames.join(', ')} çalışıyor...` : `${activeNames.join(', ')} working...`)
+            : (lang === 'tr' ? 'Ajanlar bekliyor...' : 'Agents waiting...')}
         </span>
       </div>
     )
@@ -77,7 +102,14 @@ export default function ActivityTerminal({ lang }) {
         <span className="w-2.5 h-2.5 rounded-full bg-[#a5d6ff]" />
         <span className="text-[#8b949e] ml-2">
           {lang === 'tr' ? 'Sistem Terminali' : 'System Terminal'}
+          {activeProject && <span className="text-emerald-400 ml-1.5">({activeProject})</span>}
         </span>
+        {activeAgentIds.length > 0 && (
+          <span className="ml-auto text-[#7ee787] text-[10px] flex items-center gap-1">
+            <span className="w-1.5 h-1.5 rounded-full bg-[#7ee787] animate-pulse" />
+            {activeAgentIds.map(id => getAgentName(id, lang)).filter(Boolean).join(', ')}
+          </span>
+        )}
       </div>
       <div ref={terminalRef} className="h-36 overflow-y-auto p-3 space-y-0.5 scroll-smooth" style={{ scrollBehavior: 'smooth' }}>
         {lines.map((line, i) => (

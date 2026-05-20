@@ -39,10 +39,10 @@ public class CommandQueueServiceTests : IDisposable
     }
 
     [Fact]
-    public void Enqueue_ParsesTextAndSetsTargetFile()
+    public void Enqueue_ParsesTextAndSetsChangeType()
     {
         var cmd = _queue.Enqueue("backend api ekle");
-        Assert.Contains("Backend", cmd.TargetFile, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("create", cmd.ChangeType);
     }
 
     [Fact]

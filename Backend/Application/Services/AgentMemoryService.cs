@@ -34,6 +34,8 @@ namespace SaaSFast.Application.Services
         private readonly string _sourceRoot;
         private readonly List<MemoryEntry> _episodicMemory = new();
         private readonly List<ConversationEntry> _conversationCache = new();
+        private string? _activeProject;
+        private string? _pendingProject;
 
         public AgentMemoryService(IConfiguration config)
         {
@@ -226,6 +228,41 @@ namespace SaaSFast.Application.Services
             foreach (var p in peers)
                 sb.AppendLine($"- {p.AgentId}: {p.Task} -> {p.Result}");
             return sb.ToString();
+        }
+
+        public void SetActiveProject(string? projectName)
+        {
+            _activeProject = projectName;
+        }
+
+        public string? GetActiveProject()
+        {
+            return _activeProject;
+        }
+
+        public string GetActiveProjectPrompt(bool tr)
+        {
+            if (string.IsNullOrWhiteSpace(_activeProject))
+                return "";
+            var path = $"generated_projects/{_activeProject}/";
+            return tr
+                ? $"\nAktif proje: \"{_activeProject}\". Tum dosyalari {path} klasoru icinde olustur."
+                : $"\nActive project: \"{_activeProject}\". Create ALL files inside the {path} folder.";
+        }
+
+        public void SetPendingProject(string? projectSlug)
+        {
+            _pendingProject = projectSlug;
+        }
+
+        public string? GetPendingProject()
+        {
+            return _pendingProject;
+        }
+
+        public void ClearPendingProject()
+        {
+            _pendingProject = null;
         }
 
         private List<ConversationEntry> LoadConversations()

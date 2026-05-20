@@ -1,6 +1,10 @@
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
+using Microsoft.EntityFrameworkCore;
+using SaaSFast.Domain.Entities;
+using SaaSFast.Infrastructure.Data;
 
 namespace SaaSFast.Application.Services
 {
@@ -40,8 +44,10 @@ namespace SaaSFast.Application.Services
         private readonly AgentPerformanceTracker _performance;
         private readonly CodeReviewService _review;
         private readonly OpencodeService _opencode;
+        private readonly string _generatedProjectsPath;
+        private readonly AppDbContext _db;
 
-        public CodeExecutorService(IConfiguration config, CommandQueueService queue, HttpClient http, AgentMemoryService memory, AgentPerformanceTracker performance, CodeReviewService review, OpencodeService opencode)
+        public CodeExecutorService(IConfiguration config, CommandQueueService queue, HttpClient http, AgentMemoryService memory, AgentPerformanceTracker performance, CodeReviewService review, OpencodeService opencode, AppDbContext db)
         {
             _sourceRoot = config.GetValue<string>("SourceRoot") ?? Directory.GetCurrentDirectory();
             _queue = queue;
@@ -61,6 +67,8 @@ namespace SaaSFast.Application.Services
             _performance = performance;
             _review = review;
             _opencode = opencode;
+            _generatedProjectsPath = config.GetValue<string>("GeneratedProjectsPath") ?? "generated_projects";
+            _db = db;
         }
 
         public async Task<CodeExecutionResult> ExecuteAsync(CodeCommand cmd)
@@ -79,22 +87,21 @@ namespace SaaSFast.Application.Services
                 var fullPath = Path.Combine(_sourceRoot, cmd.TargetFile!);
                 _queue.AddLog(cmd.Id, agentId, $"Dosya yolu: {fullPath}", "info");
 
-                if (!File.Exists(fullPath))
-                {
-                    _queue.AddLog(cmd.Id, agentId, $"Dosya bulunamadı: {fullPath}, AI ile tahmin ediliyor...", "warn");
-                    cmd.TargetFile = await GuessTargetFile(cmd.Text);
-                    fullPath = Path.Combine(_sourceRoot, cmd.TargetFile!);
-                    _queue.AddLog(cmd.Id, agentId, $"Yeni hedef: {cmd.TargetFile}", "info");
-                    if (!File.Exists(fullPath))
-                    {
-                        _queue.AddLog(cmd.Id, agentId, $"Dosya bulunamadı: {fullPath}", "error");
-                        _queue.MarkProcessed(cmd.Id, $"File not found: {fullPath}");
-                        return new CodeExecutionResult { Success = false, Error = "Dosya bulunamadı" };
-                    }
-                }
+                var isNewFile = !File.Exists(fullPath);
+                string oldContent;
 
-                var oldContent = await File.ReadAllTextAsync(fullPath);
-                _queue.AddLog(cmd.Id, agentId, $"Dosya okundu ({oldContent.Length} karakter, {oldContent.Split('\n').Length} satır)", "success");
+                if (isNewFile)
+                {
+                    var dir = Path.GetDirectoryName(fullPath);
+                    if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+                    _queue.AddLog(cmd.Id, agentId, $"Yeni dosya oluşturuluyor: {cmd.TargetFile}", "warn");
+                    oldContent = "";
+                }
+                else
+                {
+                    oldContent = await File.ReadAllTextAsync(fullPath);
+                    _queue.AddLog(cmd.Id, agentId, $"Dosya okundu ({oldContent.Length} karakter, {oldContent.Split('\n').Length} satır)", "success");
+                }
 
                 _queue.AddLog(cmd.Id, agentId, $"Değişiklik planlanıyor: {cmd.Text}", "info");
 
@@ -139,6 +146,7 @@ namespace SaaSFast.Application.Services
                         diff = ComputeDiff(cmd.TargetFile!, oldContent, newContent);
                         _queue.AddLog(cmd.Id, agentId, $"Duzeltilmis degisiklik: +{diff.LinesAdded} / -{diff.LinesRemoved} satir", "info");
                         await File.WriteAllTextAsync(fullPath, newContent);
+                        _ = RegisterProjectAsync(cmd.TargetFile!);
                         _queue.AddLog(cmd.Id, agentId, "Duzeltilmis dosya yazildi", "success");
                     }
                     else
@@ -153,6 +161,7 @@ namespace SaaSFast.Application.Services
                 {
                     _queue.AddLog(cmd.Id, agentId, $"Review onaylandi: {reviewResult.Feedback}", "success");
                     await File.WriteAllTextAsync(fullPath, newContent);
+                    _ = RegisterProjectAsync(cmd.TargetFile!);
                     _queue.AddLog(cmd.Id, agentId, "Dosya basariyla guncellendi", "success");
 
                 var diffLines = diff.DiffText.Split('\n', StringSplitOptions.RemoveEmptyEntries);
@@ -198,6 +207,18 @@ namespace SaaSFast.Application.Services
 
         private async Task<string> GuessTargetFile(string text)
         {
+            var lower = text.ToLowerInvariant();
+
+            var explicitPath = TryExtractExplicitPath(text);
+            if (explicitPath != null)
+                return explicitPath;
+
+            if (IsNewProjectRequest(lower))
+            {
+                var projectName = ExtractProjectName(text);
+                return $"{_generatedProjectsPath}/{projectName}/index.html";
+            }
+
             var prompt = $"Kullanıcı şöyle dedi: \"{text}\"\n\nBu komut hangi dosyayı değiştirmek istiyor? Sadece dosya yolunu yaz, başka bir şey yazma.\n\nProjedeki dosyalar:\n- frontend/src/data/agents.js (ajan ses ayarları, agent listesi)\n- frontend/src/components/MeetingRoom.jsx (ana UI, ses seçimi, chat)\n- Backend/Application/Services/AiService.cs (AI servisi)\n- Backend/Application/Services/CommandQueueService.cs (komut kuyruğu)";
 
             if (!string.IsNullOrWhiteSpace(_openRouterKey))
@@ -308,9 +329,21 @@ namespace SaaSFast.Application.Services
             return null;
         }
 
-        private static string InferTargetFile(string text)
+        private string InferTargetFile(string text)
         {
             var lower = text.ToLowerInvariant();
+
+            var extractedPath = TryExtractExplicitPath(text);
+            if (extractedPath != null)
+                return extractedPath;
+
+            var activeProj = _memory.GetActiveProject();
+            if (IsNewProjectRequest(lower))
+            {
+                if (!string.IsNullOrWhiteSpace(activeProj))
+                    return $"{_generatedProjectsPath}/{activeProj}/index.html";
+                return $"{_generatedProjectsPath}/yeni-proje/index.html";
+            }
             if (lower.Contains("agent") || lower.Contains("ajan") || lower.Contains("ses") || lower.Contains("voice") || lower.Contains("pitch"))
                 return "frontend/src/data/agents.js";
             if (lower.Contains("backend") || lower.Contains("api") || lower.Contains("ai"))
@@ -319,14 +352,177 @@ namespace SaaSFast.Application.Services
                 return "frontend/src/components/MeetingRoom.jsx";
             if (lower.Contains("queue") || lower.Contains("command") || lower.Contains("kuyruk"))
                 return "Backend/Application/Services/CommandQueueService.cs";
+            if (!string.IsNullOrWhiteSpace(activeProj))
+                return $"{_generatedProjectsPath}/{activeProj}/index.html";
             return "frontend/src/components/MeetingRoom.jsx";
+        }
+
+        private string? TryExtractExplicitPath(string text)
+        {
+            var normalized = text.Replace("\\", "/");
+            var lower = normalized.ToLowerInvariant();
+            var activeProj = _memory.GetActiveProject();
+
+            var genProjectsMatch = Regex.Match(lower, @"generated_projects/([\w-]+(?:/[\w-]+)*)");
+            var mdMatch = Regex.Match(lower, @"\b([\w-]+\.md)\b");
+
+            if (genProjectsMatch.Success)
+            {
+                var path = genProjectsMatch.Groups[1].Value;
+                if (path.Contains('/') && mdMatch.Success && !mdMatch.Value.StartsWith("index"))
+                {
+                    var folder = path;
+                    var file = mdMatch.Groups[1].Value;
+                    return $"{_generatedProjectsPath}/{folder}/{file}";
+                }
+                if (path.Contains('/'))
+                    return $"{_generatedProjectsPath}/{path}";
+                var name = path;
+                if (name.Length > 0 && name != "yeni-proje")
+                    return $"{_generatedProjectsPath}/{name}/index.html";
+            }
+
+            if (mdMatch.Success && !mdMatch.Value.StartsWith("index"))
+            {
+                var fileName = mdMatch.Groups[1].Value;
+                if (!string.IsNullOrWhiteSpace(activeProj))
+                    return $"{_generatedProjectsPath}/{activeProj}/{fileName}";
+                return $"{_generatedProjectsPath}/{fileName}";
+            }
+
+            var rootMatch = Regex.Match(lower, @"([\w-]+)\s*(?:rootu|klasörü|dizini|klasoru|dizini)\s*(?:bu|)");
+            if (rootMatch.Success)
+            {
+                var name = rootMatch.Groups[1].Value;
+                if (name.Length > 0 && !name.Contains("proje"))
+                {
+                    if (!string.IsNullOrWhiteSpace(activeProj))
+                        return $"{_generatedProjectsPath}/{activeProj}/index.html";
+                    return $"{_generatedProjectsPath}/{name}/index.html";
+                }
+            }
+
+            return null;
+        }
+
+        private static bool IsNewProjectRequest(string lower)
+        {
+            if (lower.Contains("site") || lower.Contains("website") ||
+                lower.Contains("sayfa") || lower.Contains("page") ||
+                lower.Contains("web") || lower.Contains("uygulama") ||
+                lower.Contains("app") || lower.Contains("uygulaması") ||
+                lower.Contains("uygulamasini"))
+                return true;
+
+            var projectRefs = new[] { "proje", "project" };
+            foreach (var pr in projectRefs)
+            {
+                var idx = lower.IndexOf(pr, StringComparison.Ordinal);
+                while (idx >= 0)
+                {
+                    var end = idx + pr.Length;
+                    if (end >= lower.Length || !char.IsLetter(lower[end]))
+                        return true;
+                    idx = lower.IndexOf(pr, end, StringComparison.Ordinal);
+                }
+            }
+            return false;
+        }
+
+        private static string ExtractProjectName(string text)
+        {
+            var normalized = text.Replace("\\", "/");
+            var lower = normalized.ToLowerInvariant();
+
+            var genProjectsMatch = Regex.Match(lower, @"generated_projects/([\w-]+)");
+            if (genProjectsMatch.Success)
+                return genProjectsMatch.Groups[1].Value;
+
+            var rootMatch = Regex.Match(lower, @"([\w-]+)\s*(?:rootu|klasörü|dizini|klasoru|dizini)");
+            if (rootMatch.Success)
+                return Slugify(rootMatch.Groups[1].Value);
+
+            var patterns = new[] { " isimli", " adli", " adinda", " adında", " isminde", " adında bir", " isminde bir" };
+            foreach (var pat in patterns)
+            {
+                var idx = lower.IndexOf(pat, StringComparison.Ordinal);
+                if (idx > 5)
+                {
+                    var start = Math.Max(0, idx - 50);
+                    var before = text[start..idx].Trim();
+                    var words = before.Split(new[] { ' ', '\t', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+                    for (var i = words.Length - 1; i >= 0; i--)
+                    {
+                        var w = words[i].ToLowerInvariant().Trim('.', ',', '!', '?', '"', '\'');
+                        if (w.Length > 2 && w != "bir" && w != "ile" && w != "ve" && w != "veya" && w != "icin" && w != "için")
+                            return Slugify(w);
+                    }
+                }
+            }
+            return "yeni-proje";
+        }
+
+        private static string Slugify(string text)
+        {
+            var trMap = new Dictionary<char, char> {
+                { 'ç', 'c' }, { 'ğ', 'g' }, { 'ı', 'i' }, { 'ö', 'o' }, { 'ş', 's' }, { 'ü', 'u' },
+                { 'Ç', 'c' }, { 'Ğ', 'g' }, { 'İ', 'i' }, { 'Ö', 'o' }, { 'Ş', 's' }, { 'Ü', 'u' }
+            };
+            var sb = new StringBuilder();
+            foreach (var c in text.ToLowerInvariant().Trim())
+            {
+                if (trMap.ContainsKey(c)) sb.Append(trMap[c]);
+                else if (char.IsLetterOrDigit(c) || c == '-') sb.Append(c);
+                else if (c == ' ') sb.Append('-');
+            }
+            return sb.ToString();
         }
 
         private async Task<string> GenerateNewContent(string cmdId, string command, string filePath, string oldContent)
         {
             _queue.AddLog(cmdId, "agent", "Opencode ile kod değişikliği çağrılıyor...", "info");
-            var fullPath = Path.Combine(_sourceRoot, filePath);
+
             var ext = Path.GetExtension(filePath).ToLowerInvariant();
+            var isNewProject = filePath.StartsWith(_generatedProjectsPath) && string.IsNullOrEmpty(oldContent) && ext != ".md";
+
+            if (isNewProject)
+            {
+                _queue.AddLog(cmdId, "agent", "Yeni proje oluşturuluyor...", "info");
+                var fullProjectPath = Path.Combine(_sourceRoot, Path.GetDirectoryName(filePath)!);
+                var projectPrompt = $@"Yeni bir web sitesi/proje oluşturmam gerekiyor.
+
+Kullanıcının isteği: {command}
+
+Proje klasörü: {fullProjectPath}
+
+Bu klasörün altinda HTML, CSS, JS dosyalarini olustur. index.html dosyasina eksiksiz bir web sayfasi yap.
+Tum dosyalari calisir ve eksiksiz hazirla.";
+                var newProjectResult = await _opencode.AskRawAsync(projectPrompt);
+                var mainFile = Path.Combine(_sourceRoot, filePath);
+                if (File.Exists(mainFile))
+                    return await File.ReadAllTextAsync(mainFile);
+                if (!string.IsNullOrWhiteSpace(newProjectResult))
+                {
+                    var cleaned = ExtractCode(newProjectResult, ".html");
+                    if (cleaned.Length > 0)
+                    {
+                        _queue.AddLog(cmdId, "agent", $"Yanıttan {cleaned.Length} karakter kod alındı", "success");
+                        return cleaned;
+                    }
+                }
+                _queue.AddLog(cmdId, "agent", "Opencode yanıt vermedi, OpenRouter deneniyor...", "warn");
+                var fallbackResult = await TryOpenRouterChange(cmdId, projectPrompt, ".html");
+                if (fallbackResult != null) return fallbackResult;
+                _queue.AddLog(cmdId, "agent", "OpenRouter yanıt vermedi, Gemini deneniyor...", "warn");
+                fallbackResult = await TryGeminiChange(cmdId, projectPrompt, ".html");
+                if (fallbackResult != null) return fallbackResult;
+                _queue.AddLog(cmdId, "agent", "Gemini yanıt vermedi, Groq deneniyor...", "warn");
+                fallbackResult = await TryGroqChange(cmdId, projectPrompt, ".html");
+                if (fallbackResult != null) return fallbackResult;
+                return "";
+            }
+
+            var fullPath = Path.Combine(_sourceRoot, filePath);
             var langHint = ext switch
             {
                 ".js" or ".jsx" => "JavaScript/React",
@@ -350,11 +546,14 @@ Sadece değiştirilmiş dosyanın TAMAMINI yaz. SADECE KOD yaz, aciklama EKLEME.
             _queue.AddLog(cmdId, "agent", "Opencode API çağrılıyor...", "info");
             var opencodeResult = await _opencode.AskRawAsync(prompt);
 
-            var newContent = await File.ReadAllTextAsync(fullPath);
-            if (newContent != oldContent)
+            if (File.Exists(fullPath))
             {
-                _queue.AddLog(cmdId, "agent", $"Opencode dosyayı düzenledi ({newContent.Length} karakter)", "success");
-                return newContent;
+                var newContent = await File.ReadAllTextAsync(fullPath);
+                if (newContent != oldContent)
+                {
+                    _queue.AddLog(cmdId, "agent", $"Opencode dosyayı düzenledi ({newContent.Length} karakter)", "success");
+                    return newContent;
+                }
             }
 
             _queue.AddLog(cmdId, "agent", "Opencode dosyayı değiştirmedi, yanıt metninden çıkartılıyor...", "warn");
@@ -370,6 +569,14 @@ Sadece değiştirilmiş dosyanın TAMAMINI yaz. SADECE KOD yaz, aciklama EKLEME.
 
             _queue.AddLog(cmdId, "agent", "Opencode yanıt vermedi, OpenRouter deneniyor...", "warn");
             var result = await TryOpenRouterChange(cmdId, prompt, Path.GetExtension(filePath).ToLowerInvariant());
+            if (result != null) return result;
+
+            _queue.AddLog(cmdId, "agent", "OpenRouter yanıt vermedi, Gemini deneniyor...", "warn");
+            result = await TryGeminiChange(cmdId, prompt, Path.GetExtension(filePath).ToLowerInvariant());
+            if (result != null) return result;
+
+            _queue.AddLog(cmdId, "agent", "Gemini yanıt vermedi, Groq deneniyor...", "warn");
+            result = await TryGroqChange(cmdId, prompt, Path.GetExtension(filePath).ToLowerInvariant());
             if (result != null) return result;
 
             _queue.AddLog(cmdId, "agent", "OpenRouter yanıt vermedi", "error");
@@ -599,6 +806,44 @@ Sadece değiştirilmiş dosyanın TAMAMINI yaz. SADECE KOD yaz, aciklama EKLEME.
             {
                 _queue.AddLog(cmdId, agentId, $"Frontend rebuild hatasi: {ex.Message}", "warn");
             }
+        }
+
+        private async Task RegisterProjectAsync(string filePath)
+        {
+            try
+            {
+                if (!filePath.StartsWith(_generatedProjectsPath + "/", StringComparison.OrdinalIgnoreCase))
+                    return;
+
+                var relative = filePath[_generatedProjectsPath.Length..].TrimStart('/');
+                var slashIdx = relative.IndexOf('/');
+                if (slashIdx <= 0) return;
+
+                var projectSlug = relative[..slashIdx];
+                if (string.IsNullOrWhiteSpace(projectSlug) || projectSlug == "yeni-proje")
+                    return;
+
+                var existing = await _db.Projects.FirstOrDefaultAsync(p => p.Slug == projectSlug);
+                if (existing != null)
+                {
+                    existing.UpdatedAt = DateTime.UtcNow;
+                }
+                else
+                {
+                    var displayName = string.Join(' ', projectSlug.Split('-', '_')
+                        .Select(w => w.Length > 0 ? char.ToUpper(w[0]) + w[1..] : w));
+                    _db.Projects.Add(new Project
+                    {
+                        Name = displayName,
+                        Slug = projectSlug,
+                        CreatedAt = DateTime.UtcNow,
+                        UpdatedAt = DateTime.UtcNow,
+                        Status = "active"
+                    });
+                }
+                await _db.SaveChangesAsync();
+            }
+            catch { }
         }
     }
 }

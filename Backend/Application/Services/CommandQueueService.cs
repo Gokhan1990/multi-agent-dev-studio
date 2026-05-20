@@ -199,14 +199,6 @@ namespace SaaSFast.Application.Services
             else
                 cmd.ChangeType = "edit";
 
-            if (lower.Contains("backend")) cmd.TargetFile = "Backend";
-            else if (lower.Contains("frontend")) cmd.TargetFile = "Frontend";
-            else if (lower.Contains("api")) cmd.TargetFile = "API";
-            else if (lower.Contains("database") || lower.Contains("db") || lower.Contains("veri")) cmd.TargetFile = "Database";
-            else if (lower.Contains("config") || lower.Contains("ayar")) cmd.TargetFile = "Config";
-            else if (lower.Contains("docker") || lower.Contains("deploy") || lower.Contains("devops")) cmd.TargetFile = "DevOps";
-            else if (lower.Contains("test")) cmd.TargetFile = "Tests";
-
             cmd.Summary = text.Length > 50 ? text[..50] + "..." : text;
             return cmd;
         }

@@ -11,6 +11,7 @@ namespace SaaSFast.Infrastructure.Data
         public DbSet<Agent> Agents { get; set; } = null!;
         public DbSet<Room> Rooms { get; set; } = null!;
         public DbSet<ChatMessage> ChatMessages { get; set; } = null!;
+        public DbSet<Project> Projects { get; set; } = null!;
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -56,6 +57,20 @@ namespace SaaSFast.Infrastructure.Data
                 entity.Property(e => e.VoiceId).HasMaxLength(50);
                 entity.Property(e => e.Timestamp).HasDefaultValueSql("CURRENT_TIMESTAMP");
                 entity.ToTable("ChatMessages");
+            });
+
+            modelBuilder.Entity<Project>(entity =>
+            {
+                entity.HasKey(e => e.Id);
+                entity.Property(e => e.Id).ValueGeneratedOnAdd();
+                entity.Property(e => e.Name).IsRequired().HasMaxLength(200);
+                entity.Property(e => e.Slug).IsRequired().HasMaxLength(200);
+                entity.HasIndex(e => e.Slug).IsUnique();
+                entity.Property(e => e.Description).HasMaxLength(2000);
+                entity.Property(e => e.CreatedAt).HasDefaultValueSql("CURRENT_TIMESTAMP");
+                entity.Property(e => e.UpdatedAt).HasDefaultValueSql("CURRENT_TIMESTAMP");
+                entity.Property(e => e.Status).HasMaxLength(20).HasDefaultValue("active");
+                entity.ToTable("Projects");
             });
         }
     }

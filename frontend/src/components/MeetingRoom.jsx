@@ -18,12 +18,14 @@ export default function MeetingRoom() {
   const [transcript, setTranscript] = useState([])
   const [chatInput, setChatInput] = useState('')
   const [activeCmdId, setActiveCmdId] = useState(null)
+  const [activeProject, setActiveProject] = useState(null)
   const lastLogTimeRef = useRef(null)
   const recognitionRef = useRef(null)
   const chatEndRef = useRef(null)
   const timerRef = useRef(null)
   const speakingRef = useRef(false)
   const langRef = useRef(lang)
+  const completionDataRef = useRef(null)
   langRef.current = lang
 
   useEffect(() => {
@@ -53,6 +55,11 @@ export default function MeetingRoom() {
   }, [])
 
   useEffect(() => {
+    fetch('/api/agent/project/active')
+      .then(res => res.json())
+      .then(data => { if (data.activeProject) setActiveProject(data.activeProject) })
+      .catch(() => {})
+
     fetch('/api/command/conversations?count=50')
       .then(res => res.json())
       .then(data => {
@@ -104,11 +111,17 @@ export default function MeetingRoom() {
         const act = await actRes.json()
         const cmd = (act.recent || []).find(c => c.id === activeCmdId)
         if (cmd && (cmd.status === 'completed' || cmd.status === 'failed')) {
+          const compData = completionDataRef.current
+          if (compData && !speakingRef.current) {
+            speak(compData.message, compData.agentId)
+          }
+          const resultText = cmd.status === 'completed'
+            ? (compData?.message || cmd.result?.summary || '✅ Kod değişikliği tamamlandı!')
+            : `❌ Kod değişikliği başarısız${cmd.error ? ': ' + cmd.error : ''}`
+          completionDataRef.current = null
           setTranscript(prev => [...prev, {
             who: 'system',
-            text: cmd.status === 'completed'
-              ? '✅ Kod değişikliği tamamlandı!'
-              : `❌ Kod değişikliği başarısız${cmd.error ? ': ' + cmd.error : ''}`,
+            text: resultText,
             isResult: true
           }])
           setActiveCmdId(null)
@@ -216,13 +229,20 @@ export default function MeetingRoom() {
       })
       if (!res.ok) { console.error('AI API error:', res.status); return '' }
       const data = await res.json()
+      if (data.activeProject) setActiveProject(data.activeProject)
       if (data.command) {
         const c = data.command
         setActiveCmdId(c.id)
+        if (data.completionMessage) {
+          completionDataRef.current = {
+            message: data.completionMessage,
+            agentId: data.completionAgentId || agentId
+          }
+        }
         lastLogTimeRef.current = Date.now()
         setTranscript(prev => [...prev, {
           who: agentId,
-          text: `🔧 ${c.message || 'Komut kuyruğa alındı, openCLI işliyor...'}`,
+          text: `🔧 ${c.text || 'Komut kuyruğa alındı, işleniyor...'}`,
           isResult: true
         }])
       }
@@ -348,9 +368,16 @@ export default function MeetingRoom() {
       <div className="flex-1 max-w-7xl mx-auto w-full px-4 py-6 flex flex-col">
         <header className="flex items-center justify-between mb-6">
           <div>
-            <h1 className="text-4xl font-bold text-orange-400">
-              {t(lang, 'title')}
-            </h1>
+            <div className="flex items-center gap-3">
+              <h1 className="text-4xl font-bold text-orange-400">
+                {t(lang, 'title')}
+              </h1>
+              {activeProject && (
+                <span className="bg-emerald-900/60 text-emerald-300 text-xs font-medium px-3 py-1 rounded-full border border-emerald-700/50">
+                  📁 {activeProject}
+                </span>
+              )}
+            </div>
             <p className="text-slate-500 text-sm mt-1">{t(lang, 'subtitle')}</p>
           </div>
           <div className="flex items-center gap-3">
@@ -385,7 +412,7 @@ export default function MeetingRoom() {
             <AgentGrid agents={filteredAgents} speakingAgentId={speakingAgentId} lang={lang} />
 
             <div className="mt-3">
-              <ActivityTerminal lang={lang} />
+              <ActivityTerminal lang={lang} speakingAgentId={speakingAgentId} activeProject={activeProject} />
             </div>
 
             <div className="mt-3 bg-slate-800/40 backdrop-blur-sm rounded-2xl border border-slate-700/50 p-4 flex-1 min-h-[500px] max-h-[70vh] overflow-y-auto">

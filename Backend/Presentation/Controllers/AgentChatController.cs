@@ -242,7 +242,11 @@ namespace SaaSFast.Presentation.Controllers
             if (focusProject != null)
                 response["activeProject"] = focusProject;
 
-            var isCodeChange = IsExplicitCodeCommand(request.Message) && !isCorrection;
+            // Strateji Odasi ajanlari (ceo, product, research, architect) ASLA kod yazamaz
+            var strategyRoomAgents = new[] { "ceo", "product", "research", "architect" };
+            var isStrategyAgent = strategyRoomAgents.Contains(request.AgentId);
+
+            var isCodeChange = IsExplicitCodeCommand(request.Message) && !isCorrection && !isStrategyAgent;
 
             if (isCodeChange)
             {

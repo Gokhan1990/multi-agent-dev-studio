@@ -47,6 +47,7 @@ public class AiService
     private readonly AgentMemoryService _memory;
     private readonly AgentPerformanceTracker _performance;
     private readonly AgentTrainingService _training;
+    private readonly AgentFeedbackService _feedback;
     private readonly HttpClient _http;
     private readonly string _geminiKey;
     private readonly string _geminiModel;
@@ -59,12 +60,13 @@ public class AiService
     private readonly string _openRouterBaseUrl;
     private readonly string _httpReferer;
 
-    public AiService(OpencodeService opencode, AgentMemoryService memory, AgentPerformanceTracker performance, AgentTrainingService training, IHttpClientFactory httpFactory, IConfiguration config)
+    public AiService(OpencodeService opencode, AgentMemoryService memory, AgentPerformanceTracker performance, AgentTrainingService training, AgentFeedbackService feedback, IHttpClientFactory httpFactory, IConfiguration config)
     {
         _opencode = opencode;
         _memory = memory;
         _performance = performance;
         _training = training;
+        _feedback = feedback;
         _http = httpFactory.CreateClient();
         _http.Timeout = TimeSpan.FromSeconds(60);
         _geminiKey = config["AI:GeminiApiKey"] ?? Environment.GetEnvironmentVariable("GEMINI_API_KEY") ?? "";
@@ -85,6 +87,9 @@ public class AiService
         var tr = request.Language == "tr";
         var systemPrompt = SystemPrompt(agent.Id, tr, request.Room, request.Message);
 
+        // User mesajindaki geri bildirimleri ogren
+        _feedback.LearnFromMessage(request.Message, agent.Id);
+
         var context = _memory.GetConversationContext(agent.Id, request.Room, 5);
         var history = _memory.GetAgentHistoryContext(agent.Id, 3);
         var recentContext = _memory.GetRecentContext(agent.Id, 3);
@@ -95,6 +100,7 @@ public class AiService
             : "";
         var training = _training.GetTrainingContext(agent.Id, tr);
         var examples = _training.GetAbilityExamplePrompt(agent.Id, tr);
+        var learnedLessons = _feedback.GetLessonsContext(agent.Id, tr);
 
         var projectsNote = tr
             ? "\nCalisma alanin `generated_projects/` klasörüdür. Tüm yeni dosyalari, web sitelerini, arastirma belgelerini ve projelerini bu klasör içinde olustur. KESINLIKLE `Backend/`, `frontend/`, `Infrastructure/` veya proje kokundeki dosyalari degistirme, guncelleme veya silme. Sadece `generated_projects/` altinda calis."
@@ -103,7 +109,7 @@ public class AiService
         var priorityNote = tr
             ? "\n!!! ONEMLI: Asagidaki gecmis konusmalar ESKI talimatlari icerebilir. GUNCEL talimatlar yukaridaki sistem prompt'undadir. Sistem prompt'una uy, gecmis konusmalara degil."
             : "\n!!! IMPORTANT: The conversation history below may contain OLD instructions. The CURRENT valid instructions are in the system prompt above. Follow the system prompt, not the past conversation.";
-        var userMessage = $"{priorityNote}{context}{history}{recentContext}{peerContext}{perfStr}{training}{examples}{projectsNote}{activeProjectNote}\n\nKullanici: {request.Message}";
+        var userMessage = $"{priorityNote}{context}{history}{recentContext}{peerContext}{perfStr}{training}{examples}{learnedLessons}{projectsNote}{activeProjectNote}\n\nKullanici: {request.Message}";
 
         var response = await _opencode.AskAsync(systemPrompt, userMessage);
 

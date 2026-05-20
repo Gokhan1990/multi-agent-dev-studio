@@ -31,6 +31,7 @@ builder.Services.AddHttpClient<CodeExecutorService>(c => c.Timeout = TimeSpan.Fr
 builder.Services.AddSingleton<SelfImprovementService>();
 builder.Services.AddSingleton<AgentAbilityService>();
 builder.Services.AddSingleton<AgentTrainingService>();
+builder.Services.AddSingleton<AgentFeedbackService>();
 builder.Services.AddControllers();
 
 builder.Services.AddCors(o => o.AddDefaultPolicy(p => p.AllowAnyOrigin().AllowAnyMethod().AllowAnyHeader()));

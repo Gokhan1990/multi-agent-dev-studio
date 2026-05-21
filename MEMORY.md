@@ -694,15 +694,127 @@ Kullanıcı (ses/text) → Frontend → POST /api/agent/ask
 - ✅ Backend container başarıyla rebuild edildi
 - ✅ `docker ps` — hepsi `saasfast-` önekiyle ve çalışır durumda
 
-# Memory - Oturum Özeti
+---
 
-> **Bu dosyayı güncelleme kuralı:** Her yeni özellik, bugfix veya deployment sonrası bu dosyaya ekleme yap.
-> "projeye devam" dediğinde yapay zeka sana bu dosyayı okur ve kaldığın yerden devam eder.
-> Bilgisayarı kapattığında tekrar açıp `MEMORY.md` içindeki son durumu okuyup **"projeye devam"** yazman yeterli.
+### Oturum 15 (2026-05-21) — AgentFeedbackService: Ajanlar Geri Bildirimden Öğreniyor
 
-## Proje: AI Software Company OS
-Multi-agent AI yazılım şirketi simülasyonu. 8 ajan, 2 oda, .NET 8 backend, React+Vite frontend, PostgreSQL, Docker.
+#### Yapılanlar
+
+##### 1. AgentFeedbackService Oluşturuldu (Backend/Application/Services/AgentFeedbackService.cs)
+- **Sorun**: Kullanıcı "daha detaylı", "yüzeysel", "yanlış" gibi geri bildirimler veriyor ama ajanlar aynı hataları tekrarlıyordu
+- **Çözüm**: 16 geri bildirim deseni regex ile eşleşir, her ajan için ayrı JSON dosyasına kaydedilir, en çok tekrarlanan 5 ders otomatik prompt'a eklenir
+- **Tanınan kalıplar**: daha detaylı, yüzeysel/yetersiz, yanlış/hatalı, kısa olsun, dosya oluşturma, tablo halinde, kaynak belirt, örnek ekle, madde madde, kod yazma, mantıklı değil, anlaşılmadı, tekrarlama, eksik, çok uzun, hızlandır
+- Her dersin `HitCount` ile kaç kez tekrarlandığı sayılır
+- Dersler 90 gün sonra otomatik silinir
+
+##### 2. AiService.cs Entegrasyonu
+- `_feedback.LearnFromMessage()` — her kullanıcı mesajı işlenir
+- `GetLessonsContext()` — en sık tekrarlanan 5 ders `userMessage`'ın bir parçası olarak AI'ya gönderilir
+- Prompt'a eklenen bölüm:
+  ```
+  === ÖĞRENİLEN DERSLER (kullanıcının geçmiş geri bildirimleri) ===
+  - Kullanıcı daha DETAYLI yanıt istiyor...
+  - Kullanıcı önceki yanıtı YÜZEYSEL buldu...
+  Bu derslere UY, aynı hataları tekrarlama.
+  ```
+
+##### 3. FeedbackController Eklendi
+| Metot | Path | Açıklama |
+|-------|------|----------|
+| GET | /api/feedback/{agentId} | Ajanın öğrendiği dersleri gör |
+| DELETE | /api/feedback/{agentId} | Ajanın hafızasını temizle |
+
+##### 4. Program.cs Güncellemesi
+- `builder.Services.AddSingleton<AgentFeedbackService>()` eklendi
+
+##### 5. Ajan Prompt İyileştirmeleri
+- **TeamContext** eklendi: 8 kişilik ekip ve görev dağılımı bilgisi
+- Strateji ajanları prompt'una `"Sen kod yazmazsın, sadece .md dosyası oluşturabilirsin"` eklendi
+- **Kerem/research** prompt'u: `"Daha önce 'dosya oluşturamam' demiş olabilirsin ama bu DEĞİŞTİ, HEMEN yap"`
+- **priorityNote**: `"!!! ÖNEMLİ: Aşağıdaki geçmiş konuşmalar ESKİ talimatlar içerebilir"` — konuşma geçmişinin system prompt'u ezmesini engeller
+- **AutoCreateMdFromResponse()**: AI yanıtında `generated_projects/.../....md` geçiyorsa dosyayı otomatik oluşturur
+- **"aktif projemizin adı X" / "proje adı X"** regex deseni — projeyi oluşturur veya aktif eder
+- Slug normalizasyonu: `"orumcek-projesi"` → `"orumcekprojesi"`
+
+##### 6. 4 Katmanlı Koruma (Ajanlar generated_projects/ Dışına Çıkamaz)
+1. **AiService** prompt + projectsNote
+2. **AgentChatController** strateji ajani + bekleme filtresi
+3. **CodeExecutorService InferTargetFile** sadece generated_projects/
+4. **CodeExecutorService ExecuteAsync** guard
+
+#### Dosyalar (Referans)
+| Dosya | Ne işe yarar |
+|-------|-------------|
+| `Backend/Application/Services/AgentFeedbackService.cs` | 16 geri bildirim deseni, öğrenme/hatırlama/unutma mantığı |
+| `Backend/Presentation/Controllers/FeedbackController.cs` | GET/DELETE /api/feedback/{agentId} |
+| `AgentFeedbackService.AgentMemory/Feedback/{agentId}.json` | Her ajanın öğrendiği dersler |
 
 ---
 
-## Oturum Geçmişi
+### Oturum 16 (2026-05-21) — Ajan Eğitimi: Net Görev Tanımları, Takım Bilinci, Aktif Proje Odağı
+
+#### Yapılanlar
+
+##### 1. agents/*.md Dosyaları Geliştirildi (8 ajan)
+Her ajana 3 yeni bölüm eklendi:
+
+**Ne Yapar / Ne Yapmaz** — Her ajanın görev sınırları netleştirildi:
+- Strateji ajanları: Sadece .md dosyası oluşturur, kod yazmaz
+- Mühendislik ajanları: Sadece kendi alanlarında kod yazar
+- Her ajanın "YAPMAZ" listesi diğer ajanların sorumluluklarını belirtir
+
+**Takım Arkadaşlarım** — 8 ajanın tam listesi:
+- Her ajan için rol + ne yaptığı tablo halinde
+- Kimin ne iş yaptığını bilir, rastgele iş dağılımı olmaz
+
+**Aktif Proje Kuralı**:
+- Tüm çalışmalar `generated_projects/{aktif_proje}/` altında yapılır
+- `generated_projects/` dışına dosya yazılmaz
+- Herkes kendi görev tanımındaki işi yapar
+
+##### 2. AiService.cs — TeamContext ve SystemPrompt Geliştirildi
+
+**TeamContext()** — genişletildi:
+```
+HER AJAN SADECE KENDI GOREV TANIMINDAKI ISI YAPAR. Rastgele is dagilimi YOKTUR.
+```
+Her ajan için `YAPAR` ve `YAPMAZ` listeleri eklendi:
+- Atilla: YAPAR=strateji, YAPMAZ=kod/test/devops
+- Elif: YAPAR=urun vizyonu, YAPMAZ=kod/arastirma/mimari
+- Kerem: YAPAR=arastirma, YAPMAZ=kod/urun/mimari
+- Zeynep: YAPAR=mimari, YAPMAZ=kod/arastirma/test
+- Bora: YAPAR=backend, YAPMAZ=frontend/test/devops
+- Deniz: YAPAR=frontend, YAPMAZ=backend/test/devops
+- Cem: YAPAR=test, YAPMAZ=kod/backend/frontend
+- Sibel: YAPAR=devops, YAPMAZ=kod/backend/frontend
+
+**SystemPrompt()** — her ajanın prompt'una `YAPMAZ` listesi eklendi:
+- `"YAPMAZ: Kod yazma, test, devops, urun vizyonu, arastirma, mimari tasarim"` (Atilla)
+- `"YAPMAZ: Kod yazma, arastirma, mimari, test, devops"` (Elif)
+- `"YAPMAZ: Kod yazma, urun vizyonu, mimari, test, devops"` (Kerem)
+- `"YAPMAZ: Kod yazma, arastirma, urun vizyonu, test, devops"` (Zeynep)
+- `"YAPMAZ: Frontend, test, devops, strateji, arastirma"` (Bora)
+- `"YAPMAZ: Backend, test, devops, strateji, arastirma"` (Deniz)
+- `"YAPMAZ: Kod yazma, backend, frontend, devops, strateji"` (Cem)
+- `"YAPMAZ: Kod yazma, backend, frontend, test, strateji"` (Sibel)
+
+TeamContext'e GOREV DAGILIMI KURALI eklendi:
+```
+- Strateji Odasi plan yapar ve .md dokuman olusturur. Muhendislik Odasi kod yazar ve uygular.
+- HER AJAN sadece kendi yetenek listesindeki isi yapar. Baska ajana ait ise karisma.
+- Proje disi calismaya izin YOK. Herkes aktif projeye odaklanir.
+- Kimin yapacagini belirlerken ajain yetenek listesine ve YAPMAZ listesine bak.
+```
+
+#### Değiştirilen Dosyalar
+| Dosya | Değişiklik |
+|-------|-----------|
+| `agents/ceo.md` | Ne Yapar/Ne Yapmaz + Takım Arkadaşlarım + Aktif Proje Kuralı eklendi |
+| `agents/product.md` | Ne Yapar/Ne Yapmaz + Takım Arkadaşlarım + Aktif Proje Kuralı eklendi |
+| `agents/research.md` | Ne Yapar/Ne Yapmaz + Takım Arkadaşlarım + Aktif Proje Kuralı eklendi |
+| `agents/architect.md` | Ne Yapar/Ne Yapmaz + Takım Arkadaşlarım + Aktif Proje Kuralı eklendi |
+| `agents/backend.md` | Ne Yapar/Ne Yapmaz + Takım Arkadaşlarım + Aktif Proje Kuralı eklendi |
+| `agents/frontend.md` | Ne Yapar/Ne Yapmaz + Takım Arkadaşlarım + Aktif Proje Kuralı eklendi |
+| `agents/qa.md` | Ne Yapar/Ne Yapmaz + Takım Arkadaşlarım + Aktif Proje Kuralı eklendi |
+| `agents/devops.md` | Ne Yapar/Ne Yapmaz + Takım Arkadaşlarım + Aktif Proje Kuralı eklendi |
+| `Backend/Application/Services/AiService.cs` | TeamContext + SystemPrompt genişletildi, YAPAR/YAPMAZ listeleri eklendi |
